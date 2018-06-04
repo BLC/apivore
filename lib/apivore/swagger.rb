@@ -10,6 +10,8 @@ module Apivore
       case version
       when '2.0'
         schema = File.read(File.expand_path("../../../data/swagger_2.0_schema.json", __FILE__))
+      when /^3\.(\d+\.)?(\*|\d+)$/
+        schema = File.read(File.expand_path("../../../data/swagger_3.0_schema.json", __FILE__))
       else
         raise "Unknown/unsupported Swagger version to validate against: #{version}"
       end
@@ -17,16 +19,17 @@ module Apivore
     end
 
     def version
-      swagger
+      swagger || openapi
     end
 
     def base_path
-      self['basePath'] || ''
+      self['basePath'] || self['servers'].try(:first).try(:[], 'url') || ''
     end
 
     def each_response(&block)
       paths.each do |path, path_data|
         next if vendor_specific_tag? path
+
         path_data.each do |verb, method_data|
           next if NONVERB_PATH_ITEMS.include?(verb)
           next if vendor_specific_tag? verb
@@ -34,11 +37,16 @@ module Apivore
             raise "No responses found in swagger for path '#{path}', " \
               "method #{verb}: #{method_data.inspect}"
           end
+
           method_data.responses.each do |response_code, response_data|
-            schema_location = nil
-            if response_data.schema
-              schema_location = Fragment.new ['#', 'paths', path, verb, 'responses', response_code, 'schema']
-            end
+            schema_location =
+              case
+              when response_data.schema
+                Fragment.new(['#', 'paths', path, verb, 'responses', response_code, 'schema'])
+              when (response_data.content['*/*'].schema) # TODO: update to support more content types than all
+                Fragment.new(['#', 'paths', path, verb, 'responses', response_code, 'content', '*/*', 'schema'])
+              end
+
             block.call(path, verb, response_code, schema_location)
           end
         end
